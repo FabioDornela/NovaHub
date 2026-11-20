@@ -2606,7 +2606,7 @@ Components.Button(serverControls, "Buscar servidores", function()
     clearServerResults()
 
     task.spawn(function()
-        local maxPlayers = tonumber(selectedPlayerLimit)
+        local maxPlayers = selectedPlayerLimit == "0 (vazio)" and 0 or tonumber(selectedPlayerLimit)
         local ok, result = pcall(function()
             return ServerFinder.Fetch(maxPlayers, 20)
         end)
