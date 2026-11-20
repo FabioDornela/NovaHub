@@ -2356,6 +2356,112 @@ end
 return Settings
 
 ]=],
+    ['ServerFinder'] = [=[
+local ServerFinder = {}
+
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+
+local PLACE_ID = 4520749081
+
+local function getRequestFunction()
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    if type(env.request) == "function" then return env.request end
+    if type(env.http_request) == "function" then return env.http_request end
+    if type(env.syn) == "table" and type(env.syn.request) == "function" then
+        return env.syn.request
+    end
+    if type(request) == "function" then return request end
+    if type(http_request) == "function" then return http_request end
+    return nil
+end
+
+local function getJson(url)
+    local requestFunction = getRequestFunction()
+    if requestFunction then
+        local response = requestFunction({
+            Url = url,
+            Method = "GET",
+            Headers = { ["Accept"] = "application/json" },
+        })
+        if type(response) == "table" then
+            local status = tonumber(response.StatusCode or response.Status or 200)
+            if status and (status < 200 or status >= 300) then
+                error("Roblox API respondeu HTTP " .. tostring(status))
+            end
+            local body = response.Body or response.body
+            if type(body) == "table" then return body end
+            if type(body) == "string" then return HttpService:JSONDecode(body) end
+        end
+        error("Resposta HTTP inválida do executor.")
+    end
+
+    local ok, body = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not ok then
+        error("O executor não disponibilizou request nem game:HttpGet.")
+    end
+    return HttpService:JSONDecode(body)
+end
+
+function ServerFinder.Fetch(maxPlayers, maxResults)
+    maxPlayers = tonumber(maxPlayers)
+    maxResults = math.clamp(tonumber(maxResults) or 20, 1, 50)
+
+    local url = "https://games.roblox.com/v1/games/" .. tostring(PLACE_ID)
+        .. "/servers/Public?sortOrder=Asc&limit=100&excludeFullGames=true"
+
+    local payload = getJson(url)
+    if type(payload) ~= "table" or type(payload.data) ~= "table" then
+        error("A API do Roblox retornou uma lista inválida.")
+    end
+
+    local results = {}
+    local currentJobId = game.JobId
+
+    for _, server in ipairs(payload.data) do
+        local playing = tonumber(server.playing) or 0
+        local capacity = tonumber(server.maxPlayers) or 0
+        local id = server.id
+
+        if type(id) == "string"
+            and id ~= currentJobId
+            and (not maxPlayers or playing <= maxPlayers)
+            and capacity > 0 then
+            table.insert(results, {
+                Id = id,
+                Playing = playing,
+                MaxPlayers = capacity,
+                Ping = tonumber(server.ping),
+                FPS = tonumber(server.fps),
+            })
+        end
+    end
+
+    table.sort(results, function(a, b)
+        if a.Playing == b.Playing then
+            return (a.Ping or math.huge) < (b.Ping or math.huge)
+        end
+        return a.Playing < b.Playing
+    end)
+
+    while #results > maxResults do
+        table.remove(results)
+    end
+
+    return results
+end
+
+function ServerFinder.Join(serverId)
+    assert(type(serverId) == "string" and serverId ~= "", "ID de servidor inválido")
+    TeleportService:TeleportToPlaceInstance(PLACE_ID, serverId, Players.LocalPlayer)
+end
+
+return ServerFinder
+
+]=],
 }
 local moduleCache = {}
 local function loadModule(name)
@@ -2377,6 +2483,7 @@ local ThemeManager = loadModule("ThemeManager")
 local StateManager = loadModule("StateManager")
 local KeybindManager = loadModule("KeybindManager")
 local Settings = loadModule("Settings")
+local ServerFinder = loadModule("ServerFinder")
 
 local state = StateManager.new(Config.Values)
 local ui = UI.Create(getInterfaceParent(), Config.Theme, Config)
@@ -2414,6 +2521,7 @@ end
 local Home = addPage("Home", "⌂")
 local Visual = addPage("Interface", "◈")
 local SettingsPage = addPage("Settings", "⚙")
+local ServersPage = addPage("Server Finder", "⌕")
 
 ui._ActivePage = "Home"
 UI.SwitchPage(pages, "Home", Config.Theme, Config)
@@ -2444,6 +2552,77 @@ Components.Toggle(homeSection, "Notifications", state:Get("NotificationsEnabled"
     state:Set("NotificationsEnabled", value)
     Notifications.SetEnabled(value)
 end)
+
+-- Server Finder
+local serverControls = Components.Section(ServersPage, "Server search")
+Components.Label(serverControls, "Encontre servidores públicos com poucos jogadores. A API pública não informa a idade do servidor.", true)
+
+local selectedPlayerLimit = "0 (vazio)"
+local serverStatus = Components.Label(serverControls, "Pronto para buscar.", true)
+local resultsSection = Components.Section(ServersPage, "Results")
+
+local function clearServerResults()
+    for _, child in ipairs(resultsSection:GetChildren()) do
+        if child:GetAttribute("NovaServerResult") then
+            child:Destroy()
+        end
+    end
+end
+
+local function renderServerResults(servers)
+    clearServerResults()
+
+    if #servers == 0 then
+        serverStatus("Nenhum servidor encontrado com esse filtro. Tente aumentar o limite de jogadores.")
+        return
+    end
+
+    serverStatus("Encontrados " .. tostring(#servers) .. " servidores nesta página da lista pública.")
+
+    for index, server in ipairs(servers) do
+        local text = string.format("Servidor %02d  •  %d/%d jogadores", index, server.Playing, server.MaxPlayers)
+        local button = Components.Button(resultsSection, text, function()
+            serverStatus("Conectando ao servidor selecionado...")
+            local ok, err = pcall(function()
+                ServerFinder.Join(server.Id)
+            end)
+            if not ok then
+                serverStatus("Não foi possível entrar: " .. tostring(err))
+                Notifications.Show("Server Finder", "Falha ao entrar no servidor selecionado.", 4, "Error")
+            end
+        end)
+        button:SetAttribute("NovaServerResult", true)
+    end
+end
+
+Components.Dropdown(serverControls, "Máximo de jogadores", {
+    "0 (vazio)", "1", "2", "3", "4", "5", "Sem filtro"
+}, selectedPlayerLimit, function(value)
+    selectedPlayerLimit = value
+end)
+
+Components.Button(serverControls, "Buscar servidores", function()
+    serverStatus("Consultando a lista pública do Roblox...")
+    clearServerResults()
+
+    task.spawn(function()
+        local maxPlayers = tonumber(selectedPlayerLimit)
+        local ok, result = pcall(function()
+            return ServerFinder.Fetch(maxPlayers, 20)
+        end)
+
+        if not ok then
+            serverStatus("Erro na busca: " .. tostring(result))
+            Notifications.Show("Server Finder", "Não foi possível consultar os servidores. Verifique o suporte HTTP do Delta.", 5, "Error")
+            return
+        end
+
+        renderServerResults(result)
+        Notifications.Show("Server Finder", tostring(#result) .. " servidores encontrados.", 3, "Success")
+    end)
+end)
+
+Components.Label(resultsSection, "Os resultados mostram apenas a primeira página pública disponível. Servidores podem fechar antes da conexão.", true)
 
 -- Interface
 local visualSection = Components.Section(Visual, "Interface options")
