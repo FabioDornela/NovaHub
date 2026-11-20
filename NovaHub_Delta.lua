@@ -998,3 +998,1501 @@ end
 function Components.Init(colors, config)
 	theme = colors
 	configRef = config or configRef
+	ensureGlobalInput()
+end
+
+function Components.Destroy()
+	for _, connection in ipairs(globalInputConnections) do
+		if connection.Connected then
+			connection:Disconnect()
+		end
+	end
+	table.clear(globalInputConnections)
+	globalInputInitialized = false
+	activeSlider = nil
+	activeKeybindListener = nil
+	table.clear(registeredKeybinds)
+	table.clear(searchItems)
+	table.clear(sections)
+	table.clear(themeBindings)
+end
+
+function Components.RefreshTheme(newTheme)
+	theme = newTheme or theme
+	for i = #themeBindings, 1, -1 do
+		local entry = themeBindings[i]
+		if not entry.Instance or not entry.Instance.Parent then
+			table.remove(themeBindings, i)
+		elseif entry.CustomFn then
+			entry.CustomFn(theme)
+		else
+			local color = getColor(entry.Key, entry.Fallback)
+			if color then
+				entry.Instance[entry.Prop] = color
+			end
+		end
+	end
+end
+
+function Components.Section(parent, title)
+	local section = Instance.new("Frame")
+	section.Name = "Section_" .. tostring(title)
+	section.BackgroundTransparency = 1
+	section.Size = UDim2.new(1, 0, 0, 0)
+	section.AutomaticSize = Enum.AutomaticSize.Y
+	section.Parent = parent
+
+	local sectionLayout = Instance.new("UIListLayout")
+	sectionLayout.Padding = UDim.new(0, 6)
+	sectionLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	sectionLayout.Parent = section
+
+	local headerRow = Instance.new("Frame")
+	headerRow.Name = "SectionHeader"
+	headerRow.LayoutOrder = 1
+	headerRow.BackgroundTransparency = 1
+	headerRow.Size = UDim2.new(1, 0, 0, 22)
+	headerRow.Parent = section
+
+	local accentBar = Instance.new("Frame")
+	accentBar.AnchorPoint = Vector2.new(0, 0.5)
+	accentBar.Position = UDim2.new(0, 2, 0.5, 0)
+	accentBar.Size = UDim2.fromOffset(3, 12)
+	accentBar.BackgroundColor3 = theme.Accent
+	accentBar.BorderSizePixel = 0
+	accentBar.Parent = headerRow
+	makeCorner(accentBar, 2)
+	bindTheme(accentBar, "BackgroundColor3", "Accent")
+
+	local heading = Instance.new("TextLabel")
+	heading.BackgroundTransparency = 1
+	heading.Position = UDim2.fromOffset(10, 0)
+	heading.Size = UDim2.new(1, -10, 1, 0)
+	heading.Font = Enum.Font.GothamBold
+	heading.TextSize = 12
+	heading.TextColor3 = theme.Text
+	heading.TextXAlignment = Enum.TextXAlignment.Left
+	heading.Text = string.upper(tostring(title))
+	heading.Parent = headerRow
+	bindTheme(heading, "TextColor3", "Text")
+
+	local container = Instance.new("Frame")
+	container.Name = "Container"
+	container.LayoutOrder = 2
+	container.Size = UDim2.new(1, 0, 0, 0)
+	container.AutomaticSize = Enum.AutomaticSize.Y
+	container.BackgroundColor3 = theme.Panel
+	container.BorderSizePixel = 0
+	container.Parent = section
+	makeCorner(container, 10)
+	local containerStroke = makeStroke(container, getColor("Stroke", "Element"), 1, 0.3)
+	bindTheme(container, "BackgroundColor3", "Panel")
+	bindTheme(containerStroke, "Color", "Stroke", "Element")
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 6)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = container
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingTop = UDim.new(0, 8)
+	padding.PaddingBottom = UDim.new(0, 8)
+	padding.PaddingLeft = UDim.new(0, 8)
+	padding.PaddingRight = UDim.new(0, 8)
+	padding.Parent = container
+
+	table.insert(sections, { Section = section, Container = container })
+	return container
+end
+
+function Components.Filter(query)
+	query = string.lower(query or "")
+
+	for i = #searchItems, 1, -1 do
+		local entry = searchItems[i]
+		if not entry.Row or not entry.Row.Parent then
+			table.remove(searchItems, i)
+		else
+			local name = entry.Row:GetAttribute("SearchName") or ""
+			entry.Row.Visible = (query == "") or (string.find(name, query, 1, true) ~= nil)
+		end
+	end
+
+	-- Oculta seções que ficaram completamente vazias durante a busca
+	for i = #sections, 1, -1 do
+		local entry = sections[i]
+		if not entry.Section or not entry.Section.Parent then
+			table.remove(sections, i)
+		elseif query == "" then
+			entry.Section.Visible = true
+		else
+			local hasVisibleChild = false
+			for _, child in ipairs(entry.Container:GetChildren()) do
+				if child:IsA("GuiObject") and child.Visible and child:GetAttribute("SearchName") ~= nil then
+					hasVisibleChild = true
+					break
+				end
+			end
+			entry.Section.Visible = hasVisibleChild
+		end
+	end
+end
+
+function Components.Button(parent, text, callback)
+	local button = Instance.new("TextButton")
+	button.Name = "Button_" .. tostring(text)
+	button.Size = UDim2.new(1, 0, 0, 38)
+	button.BackgroundColor3 = theme.Element
+	button.Text = ""
+	button.AutoButtonColor = false
+	button.Parent = parent
+	makeCorner(button, 8)
+	local stroke = makeStroke(button, getColor("Stroke", "Element"), 1, 0.35)
+	bindTheme(button, "BackgroundColor3", "Element")
+	bindTheme(stroke, "Color", "Stroke", "Element")
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromOffset(12, 0)
+	label.Size = UDim2.new(1, -38, 1, 0)
+	label.Font = Enum.Font.GothamMedium
+	label.TextSize = 12
+	label.TextColor3 = theme.Text
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextTruncate = Enum.TextTruncate.AtEnd
+	label.Text = tostring(text)
+	label.Parent = button
+	bindTheme(label, "TextColor3", "Text")
+
+	local arrow = Instance.new("TextLabel")
+	arrow.BackgroundTransparency = 1
+	arrow.AnchorPoint = Vector2.new(1, 0.5)
+	arrow.Position = UDim2.new(1, -12, 0.5, 0)
+	arrow.Size = UDim2.fromOffset(14, 16)
+	arrow.Font = Enum.Font.GothamBold
+	arrow.TextSize = 14
+	arrow.TextColor3 = theme.Muted
+	arrow.Text = "›"
+	arrow.Parent = button
+	bindTheme(arrow, "TextColor3", "Muted")
+
+	button.MouseEnter:Connect(function()
+		playTween(button, TweenInfo.new(0.14), { BackgroundColor3 = getColor("ElementHover", "Element") })
+		playTween(stroke, TweenInfo.new(0.14), { Color = theme.Accent, Transparency = 0.15 })
+		playTween(arrow, TweenInfo.new(0.14), { TextColor3 = theme.Accent, Position = UDim2.new(1, -9, 0.5, 0) })
+	end)
+
+	button.MouseLeave:Connect(function()
+		playTween(button, TweenInfo.new(0.14), { BackgroundColor3 = theme.Element })
+		playTween(stroke, TweenInfo.new(0.14), { Color = getColor("Stroke", "Element"), Transparency = 0.35 })
+		playTween(arrow, TweenInfo.new(0.14), { TextColor3 = theme.Muted, Position = UDim2.new(1, -12, 0.5, 0) })
+	end)
+
+	button.MouseButton1Down:Connect(function()
+		playTween(button, TweenInfo.new(0.08), { BackgroundColor3 = getColor("ElementActive", "Element") })
+	end)
+
+	button.MouseButton1Up:Connect(function()
+		playTween(button, TweenInfo.new(0.12), { BackgroundColor3 = getColor("ElementHover", "Element") })
+	end)
+
+	button.Activated:Connect(function()
+		if callback then
+			callback()
+		end
+	end)
+
+	register(button, text)
+	return button
+end
+
+function Components.Toggle(parent, name, default, callback)
+	local value = default == true
+
+	-- Linha inteira clicável (muito melhor em telas touch)
+	local row = Instance.new("TextButton")
+	row.Name = "Toggle_" .. tostring(name)
+	row.Size = UDim2.new(1, 0, 0, 40)
+	row.BackgroundColor3 = theme.Element
+	row.Text = ""
+	row.AutoButtonColor = false
+	row.Parent = parent
+	makeCorner(row, 8)
+	local rowStroke = makeStroke(row, getColor("Stroke", "Element"), 1, 0.35)
+	bindTheme(row, "BackgroundColor3", "Element")
+	bindTheme(rowStroke, "Color", "Stroke", "Element")
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromOffset(12, 0)
+	label.Size = UDim2.new(1, -68, 1, 0)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 12
+	label.TextColor3 = theme.Text
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextTruncate = Enum.TextTruncate.AtEnd
+	label.Text = tostring(name)
+	label.Parent = row
+	bindTheme(label, "TextColor3", "Text")
+
+	local switch = Instance.new("Frame")
+	switch.AnchorPoint = Vector2.new(1, 0.5)
+	switch.Position = UDim2.new(1, -12, 0.5, 0)
+	switch.Size = UDim2.fromOffset(40, 22)
+	switch.BackgroundColor3 = value and theme.Accent or theme.Background
+	switch.BorderSizePixel = 0
+	switch.Parent = row
+	makeCorner(switch, 20)
+	local switchStroke = makeStroke(switch, value and theme.Accent or getColor("StrokeLight", "Stroke"), 1, value and 0.1 or 0.35)
+
+	local knob = Instance.new("Frame")
+	knob.AnchorPoint = Vector2.new(0, 0.5)
+	knob.Size = UDim2.fromOffset(16, 16)
+	knob.Position = value and UDim2.new(1, -19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+	knob.BackgroundColor3 = Color3.new(1, 1, 1)
+	knob.BorderSizePixel = 0
+	knob.Parent = switch
+	makeCorner(knob, 20)
+
+	local function refreshVisual(instant)
+		local info = instant and TweenInfo.new(0) or TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		playTween(switch, info, { BackgroundColor3 = value and theme.Accent or theme.Background })
+		playTween(switchStroke, info, {
+			Color = value and theme.Accent or getColor("StrokeLight", "Stroke"),
+			Transparency = value and 0.1 or 0.35,
+		})
+		playTween(knob, instant and TweenInfo.new(0) or TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			Position = value and UDim2.new(1, -19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+		})
+	end
+
+	bindThemeCallback(row, function()
+		refreshVisual(true)
+	end)
+
+	row.MouseEnter:Connect(function()
+		playTween(row, TweenInfo.new(0.12), { BackgroundColor3 = getColor("ElementHover", "Element") })
+	end)
+	row.MouseLeave:Connect(function()
+		playTween(row, TweenInfo.new(0.12), { BackgroundColor3 = theme.Element })
+	end)
+
+	local function set(nextValue, silent)
+		value = nextValue == true
+		refreshVisual(false)
+		if callback and not silent then
+			callback(value)
+		end
+	end
+
+	row.Activated:Connect(function()
+		set(not value)
+	end)
+
+	register(row, name)
+	return set
+end
+
+function Components.Slider(parent, name, minimum, maximum, default, callback, step)
+	step = (type(step) == "number" and step > 0) and step or 1
+	local range = math.max(maximum - minimum, 1e-6)
+	local value = math.clamp(default or minimum, minimum, maximum)
+
+	local row = Instance.new("Frame")
+	row.Name = "Slider_" .. tostring(name)
+	row.Size = UDim2.new(1, 0, 0, 62)
+	row.BackgroundColor3 = theme.Element
+	row.BorderSizePixel = 0
+	row.Parent = parent
+	makeCorner(row, 8)
+	local rowStroke = makeStroke(row, getColor("Stroke", "Element"), 1, 0.35)
+	bindTheme(row, "BackgroundColor3", "Element")
+	bindTheme(rowStroke, "Color", "Stroke", "Element")
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromOffset(12, 6)
+	label.Size = UDim2.new(1, -82, 0, 22)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 12
+	label.TextColor3 = theme.Text
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextTruncate = Enum.TextTruncate.AtEnd
+	label.Text = tostring(name)
+	label.Parent = row
+	bindTheme(label, "TextColor3", "Text")
+
+	local valueBadge = Instance.new("TextLabel")
+	valueBadge.AnchorPoint = Vector2.new(1, 0)
+	valueBadge.Position = UDim2.new(1, -10, 0, 7)
+	valueBadge.Size = UDim2.fromOffset(56, 20)
+	valueBadge.BackgroundColor3 = theme.Background
+	valueBadge.Font = Enum.Font.GothamMedium
+	valueBadge.TextSize = 11
+	valueBadge.TextColor3 = theme.Accent
+	valueBadge.Text = formatNumber(value, step)
+	valueBadge.Parent = row
+	makeCorner(valueBadge, 5)
+	bindTheme(valueBadge, "BackgroundColor3", "Background")
+	bindTheme(valueBadge, "TextColor3", "Accent")
+
+	-- Hitbox de 28px de altura para facilitar interação com dedo no mobile
+	local hitArea = Instance.new("Frame")
+	hitArea.Name = "SliderHitArea"
+	hitArea.BackgroundTransparency = 1
+	hitArea.Position = UDim2.fromOffset(12, 30)
+	hitArea.Size = UDim2.new(1, -24, 0, 28)
+	hitArea.Parent = row
+
+	local track = Instance.new("Frame")
+	track.AnchorPoint = Vector2.new(0, 0.5)
+	track.Position = UDim2.fromScale(0, 0.5)
+	track.Size = UDim2.new(1, 0, 0, 6)
+	track.BackgroundColor3 = theme.Background
+	track.BorderSizePixel = 0
+	track.Parent = hitArea
+	makeCorner(track, 6)
+	bindTheme(track, "BackgroundColor3", "Background")
+
+	local initialRatio = (value - minimum) / range
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.new(initialRatio, 0, 1, 0)
+	fill.BackgroundColor3 = theme.Accent
+	fill.BorderSizePixel = 0
+	fill.Parent = track
+	makeCorner(fill, 6)
+	bindTheme(fill, "BackgroundColor3", "Accent")
+
+	local thumb = Instance.new("Frame")
+	thumb.AnchorPoint = Vector2.new(0.5, 0.5)
+	thumb.Position = UDim2.new(initialRatio, 0, 0.5, 0)
+	thumb.Size = UDim2.fromOffset(14, 14)
+	thumb.BackgroundColor3 = Color3.new(1, 1, 1)
+	thumb.BorderSizePixel = 0
+	thumb.Parent = track
+	makeCorner(thumb, 14)
+	local thumbStroke = makeStroke(thumb, theme.Accent, 2, 0)
+	bindTheme(thumbStroke, "Color", "Accent")
+
+	local function snap(rawValue)
+		local stepped = math.floor(((rawValue - minimum) / step) + 0.5) * step + minimum
+		return math.clamp(stepped, minimum, maximum)
+	end
+
+	local function set(nextValue, silent)
+		local snapped = snap(nextValue)
+		local changed = math.abs(snapped - value) > 1e-6
+		value = snapped
+		local ratio = (value - minimum) / range
+		valueBadge.Text = formatNumber(value, step)
+		playTween(fill, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = UDim2.new(ratio, 0, 1, 0),
+		})
+		playTween(thumb, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Position = UDim2.new(ratio, 0, 0.5, 0),
+		})
+		if callback and not silent and changed then
+			callback(value)
+		end
+	end
+
+	local function updateFromInput(input)
+		local width = math.max(track.AbsoluteSize.X, 1)
+		local ratio = math.clamp((input.Position.X - track.AbsolutePosition.X) / width, 0, 1)
+		set(minimum + range * ratio)
+	end
+
+	hitArea.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			playTween(thumb, TweenInfo.new(0.12), { Size = UDim2.fromOffset(17, 17) })
+			activeSlider = {
+				Input = input,
+				Update = updateFromInput,
+				Finish = function()
+					playTween(thumb, TweenInfo.new(0.12), { Size = UDim2.fromOffset(14, 14) })
+				end,
+			}
+			updateFromInput(input)
+		end
+	end)
+
+	register(row, name)
+	return set
+end
+
+function Components.Dropdown(parent, name, options, default, callback)
+	options = options or {}
+	local selected = default or options[1] or ""
+	local isOpen = false
+	local optionButtons = {}
+
+	local holder = Instance.new("Frame")
+	holder.Name = "Dropdown_" .. tostring(name)
+	holder.Size = UDim2.new(1, 0, 0, 0)
+	holder.BackgroundTransparency = 1
+	holder.AutomaticSize = Enum.AutomaticSize.Y
+	holder.Parent = parent
+
+	-- Corrige o bug de sobreposição: empilha a linha e a lista verticalmente
+	local holderLayout = Instance.new("UIListLayout")
+	holderLayout.Padding = UDim.new(0, 4)
+	holderLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	holderLayout.Parent = holder
+
+	local row = Instance.new("TextButton")
+	row.LayoutOrder = 1
+	row.Size = UDim2.new(1, 0, 0, 40)
+	row.BackgroundColor3 = theme.Element
+	row.Text = ""
+	row.AutoButtonColor = false
+	row.Parent = holder
+	makeCorner(row, 8)
+	local rowStroke = makeStroke(row, getColor("Stroke", "Element"), 1, 0.35)
+	bindTheme(row, "BackgroundColor3", "Element")
+	bindTheme(rowStroke, "Color", "Stroke", "Element")
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromOffset(12, 0)
+	label.Size = UDim2.new(0.48, -12, 1, 0)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 12
+	label.TextColor3 = theme.Text
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextTruncate = Enum.TextTruncate.AtEnd
+	label.Text = tostring(name)
+	label.Parent = row
+	bindTheme(label, "TextColor3", "Text")
+
+	local pickerBox = Instance.new("Frame")
+	pickerBox.AnchorPoint = Vector2.new(1, 0.5)
+	pickerBox.Position = UDim2.new(1, -8, 0.5, 0)
+	pickerBox.Size = UDim2.new(0.5, -4, 0, 28)
+	pickerBox.BackgroundColor3 = theme.Background
+	pickerBox.BorderSizePixel = 0
+	pickerBox.Parent = row
+	makeCorner(pickerBox, 6)
+	local pickerStroke = makeStroke(pickerBox, getColor("Stroke", "Element"), 1, 0.35)
+	bindTheme(pickerBox, "BackgroundColor3", "Background")
+	bindTheme(pickerStroke, "Color", "Stroke", "Element")
+
+	local pickerText = Instance.new("TextLabel")
+	pickerText.BackgroundTransparency = 1
+	pickerText.Position = UDim2.fromOffset(8, 0)
+	pickerText.Size = UDim2.new(1, -24, 1, 0)
+	pickerText.Font = Enum.Font.GothamMedium
+	pickerText.TextSize = 11
+	pickerText.TextColor3 = theme.Text
+	pickerText.TextXAlignment = Enum.TextXAlignment.Left
+	pickerText.TextTruncate = Enum.TextTruncate.AtEnd
+	pickerText.Text = tostring(selected)
+	pickerText.Parent = pickerBox
+	bindTheme(pickerText, "TextColor3", "Text")
+
+	local chevron = Instance.new("TextLabel")
+	chevron.BackgroundTransparency = 1
+	chevron.AnchorPoint = Vector2.new(1, 0.5)
+	chevron.Position = UDim2.new(1, -6, 0.5, 0)
+	chevron.Size = UDim2.fromOffset(14, 14)
+	chevron.Font = Enum.Font.GothamBold
+	chevron.TextSize = 11
+	chevron.TextColor3 = theme.Muted
+	chevron.Text = "▾"
+	chevron.Parent = pickerBox
+	bindTheme(chevron, "TextColor3", "Muted")
+
+	local list = Instance.new("Frame")
+	list.Name = "OptionsList"
+	list.LayoutOrder = 2
+	list.Size = UDim2.new(1, 0, 0, 0)
+	list.BackgroundColor3 = theme.Background
+	list.BorderSizePixel = 0
+	list.Visible = false
+	list.AutomaticSize = Enum.AutomaticSize.Y
+	list.Parent = holder
+	makeCorner(list, 8)
+	local listStroke = makeStroke(list, getColor("Stroke", "Element"), 1, 0.25)
+	bindTheme(list, "BackgroundColor3", "Background")
+	bindTheme(listStroke, "Color", "Stroke", "Element")
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 4)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = list
+
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop = UDim.new(0, 6)
+	pad.PaddingBottom = UDim.new(0, 6)
+	pad.PaddingLeft = UDim.new(0, 6)
+	pad.PaddingRight = UDim.new(0, 6)
+	pad.Parent = list
+
+	local function refreshOptionsVisual()
+		for _, item in ipairs(optionButtons) do
+			local isSelected = item.Value == selected
+			item.Button.BackgroundColor3 = isSelected and getColor("ElementActive", "Element") or theme.Element
+			item.Label.TextColor3 = isSelected and theme.Accent or theme.Text
+			item.Check.Visible = isSelected
+			item.Check.TextColor3 = theme.Accent
+		end
+	end
+
+	local function setOpen(openState)
+		isOpen = openState == true
+		list.Visible = isOpen
+		playTween(chevron, TweenInfo.new(0.15), { Rotation = isOpen and 180 or 0 })
+		playTween(pickerStroke, TweenInfo.new(0.15), {
+			Color = isOpen and theme.Accent or getColor("Stroke", "Element"),
+			Transparency = isOpen and 0.1 or 0.35,
+		})
+	end
+
+	local function choose(option, silent)
+		selected = option
+		pickerText.Text = tostring(selected)
+		refreshOptionsVisual()
+		setOpen(false)
+		if callback and not silent then
+			callback(selected)
+		end
+	end
+
+	for index, option in ipairs(options) do
+		local choice = Instance.new("TextButton")
+		choice.LayoutOrder = index
+		choice.Size = UDim2.new(1, 0, 0, 32)
+		choice.BackgroundColor3 = theme.Element
+		choice.Text = ""
+		choice.AutoButtonColor = false
+		choice.Parent = list
+		makeCorner(choice, 6)
+
+		local optLabel = Instance.new("TextLabel")
+		optLabel.BackgroundTransparency = 1
+		optLabel.Position = UDim2.fromOffset(10, 0)
+		optLabel.Size = UDim2.new(1, -30, 1, 0)
+		optLabel.Font = Enum.Font.Gotham
+		optLabel.TextSize = 11
+		optLabel.TextColor3 = theme.Text
+		optLabel.TextXAlignment = Enum.TextXAlignment.Left
+		optLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		optLabel.Text = tostring(option)
+		optLabel.Parent = choice
+
+		local check = Instance.new("TextLabel")
+		check.BackgroundTransparency = 1
+		check.AnchorPoint = Vector2.new(1, 0.5)
+		check.Position = UDim2.new(1, -8, 0.5, 0)
+		check.Size = UDim2.fromOffset(14, 14)
+		check.Font = Enum.Font.GothamBold
+		check.TextSize = 11
+		check.TextColor3 = theme.Accent
+		check.Text = "✓"
+		check.Visible = option == selected
+		check.Parent = choice
+
+		choice.MouseEnter:Connect(function()
+			if option ~= selected then
+				playTween(choice, TweenInfo.new(0.1), { BackgroundColor3 = getColor("ElementHover", "Element") })
+			end
+		end)
+		choice.MouseLeave:Connect(function()
+			if option ~= selected then
+				playTween(choice, TweenInfo.new(0.1), { BackgroundColor3 = theme.Element })
+			end
+		end)
+		choice.Activated:Connect(function()
+			choose(option)
+		end)
+
+		table.insert(optionButtons, {
+			Value = option,
+			Button = choice,
+			Label = optLabel,
+			Check = check,
+		})
+	end
+
+	refreshOptionsVisual()
+	bindThemeCallback(holder, refreshOptionsVisual)
+
+	row.MouseEnter:Connect(function()
+		playTween(row, TweenInfo.new(0.12), { BackgroundColor3 = getColor("ElementHover", "Element") })
+	end)
+	row.MouseLeave:Connect(function()
+		playTween(row, TweenInfo.new(0.12), { BackgroundColor3 = theme.Element })
+	end)
+	row.Activated:Connect(function()
+		setOpen(not isOpen)
+	end)
+
+	register(holder, name)
+	return choose
+end
+
+function Components.Keybind(parent, name, defaultKey, callback)
+	local key = defaultKey or Enum.KeyCode.F
+	local listening = false
+
+	local row = Instance.new("Frame")
+	row.Name = "Keybind_" .. tostring(name)
+	row.Size = UDim2.new(1, 0, 0, 40)
+	row.BackgroundColor3 = theme.Element
+	row.BorderSizePixel = 0
+	row.Parent = parent
+	makeCorner(row, 8)
+	local rowStroke = makeStroke(row, getColor("Stroke", "Element"), 1, 0.35)
+	bindTheme(row, "BackgroundColor3", "Element")
+	bindTheme(rowStroke, "Color", "Stroke", "Element")
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromOffset(12, 0)
+	label.Size = UDim2.new(1, -110, 1, 0)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 12
+	label.TextColor3 = theme.Text
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextTruncate = Enum.TextTruncate.AtEnd
+	label.Text = tostring(name)
+	label.Parent = row
+	bindTheme(label, "TextColor3", "Text")
+
+	local button = Instance.new("TextButton")
+	button.AnchorPoint = Vector2.new(1, 0.5)
+	button.Size = UDim2.fromOffset(86, 26)
+	button.Position = UDim2.new(1, -10, 0.5, 0)
+	button.BackgroundColor3 = theme.Background
+	button.Text = key.Name
+	button.TextColor3 = theme.Accent
+	button.TextSize = 11
+	button.Font = Enum.Font.GothamMedium
+	button.AutoButtonColor = false
+	button.Parent = row
+	makeCorner(button, 6)
+	local btnStroke = makeStroke(button, getColor("Stroke", "Element"), 1, 0.3)
+	bindTheme(button, "BackgroundColor3", "Background")
+	bindTheme(button, "TextColor3", "Accent")
+	bindTheme(btnStroke, "Color", "Stroke", "Element")
+
+	local function stopListening()
+		listening = false
+		button.Text = key.Name
+		playTween(btnStroke, TweenInfo.new(0.14), {
+			Color = getColor("Stroke", "Element"),
+			Transparency = 0.3,
+		})
+	end
+
+	button.Activated:Connect(function()
+		if activeKeybindListener then
+			activeKeybindListener.Cancel()
+			activeKeybindListener = nil
+		end
+		listening = true
+		button.Text = "Tecla..."
+		playTween(btnStroke, TweenInfo.new(0.14), { Color = theme.Accent, Transparency = 0 })
+
+		activeKeybindListener = {
+			Assign = function(newKey)
+				key = newKey
+				stopListening()
+			end,
+			Cancel = stopListening,
+		}
+	end)
+
+	table.insert(registeredKeybinds, {
+		Row = row,
+		GetKey = function()
+			return key
+		end,
+		Trigger = function()
+			if not listening and callback then
+				callback(key)
+			end
+		end,
+	})
+
+	register(row, name)
+	return function(newKey)
+		if typeof(newKey) == "EnumItem" and newKey.EnumType == Enum.KeyCode then
+			key = newKey
+			if not listening then
+				button.Text = key.Name
+			end
+		end
+	end
+end
+
+-- Novo componente: TextBox completo com feedback de foco
+function Components.TextBox(parent, name, placeholder, defaultText, callback)
+	local row = Instance.new("Frame")
+	row.Name = "TextBox_" .. tostring(name)
+	row.Size = UDim2.new(1, 0, 0, 42)
+	row.BackgroundColor3 = theme.Element
+	row.BorderSizePixel = 0
+	row.Parent = parent
+	makeCorner(row, 8)
+	local rowStroke = makeStroke(row, getColor("Stroke", "Element"), 1, 0.35)
+	bindTheme(row, "BackgroundColor3", "Element")
+	bindTheme(rowStroke, "Color", "Stroke", "Element")
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromOffset(12, 0)
+	label.Size = UDim2.new(0.45, -12, 1, 0)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 12
+	label.TextColor3 = theme.Text
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextTruncate = Enum.TextTruncate.AtEnd
+	label.Text = tostring(name)
+	label.Parent = row
+	bindTheme(label, "TextColor3", "Text")
+
+	local inputWrap = Instance.new("Frame")
+	inputWrap.AnchorPoint = Vector2.new(1, 0.5)
+	inputWrap.Position = UDim2.new(1, -8, 0.5, 0)
+	inputWrap.Size = UDim2.new(0.53, -4, 0, 28)
+	inputWrap.BackgroundColor3 = theme.Background
+	inputWrap.BorderSizePixel = 0
+	inputWrap.Parent = row
+	makeCorner(inputWrap, 6)
+	local inputStroke = makeStroke(inputWrap, getColor("Stroke", "Element"), 1, 0.3)
+	bindTheme(inputWrap, "BackgroundColor3", "Background")
+	bindTheme(inputStroke, "Color", "Stroke", "Element")
+
+	local box = Instance.new("TextBox")
+	box.BackgroundTransparency = 1
+	box.Position = UDim2.fromOffset(8, 0)
+	box.Size = UDim2.new(1, -16, 1, 0)
+	box.Font = Enum.Font.Gotham
+	box.TextSize = 11
+	box.TextColor3 = theme.Text
+	box.PlaceholderText = tostring(placeholder or "Digite aqui...")
+	box.PlaceholderColor3 = theme.Muted
+	box.Text = tostring(defaultText or "")
+	box.TextXAlignment = Enum.TextXAlignment.Left
+	box.ClearTextOnFocus = false
+	box.ClipsDescendants = true
+	box.Parent = inputWrap
+	bindTheme(box, "TextColor3", "Text")
+	bindTheme(box, "PlaceholderColor3", "Muted")
+
+	box.Focused:Connect(function()
+		playTween(inputStroke, TweenInfo.new(0.14), { Color = theme.Accent, Transparency = 0 })
+	end)
+
+	box.FocusLost:Connect(function(enterPressed)
+		playTween(inputStroke, TweenInfo.new(0.14), {
+			Color = getColor("Stroke", "Element"),
+			Transparency = 0.3,
+		})
+		if callback then
+			callback(box.Text, enterPressed)
+		end
+	end)
+
+	register(row, name)
+	return function(newText)
+		box.Text = tostring(newText or "")
+	end
+end
+
+-- Novo componente: Label informativo / status dinâmico
+function Components.Label(parent, text, muted)
+	local label = Instance.new("TextLabel")
+	label.Name = "Label"
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.new(1, 0, 0, 0)
+	label.AutomaticSize = Enum.AutomaticSize.Y
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 12
+	label.TextColor3 = muted and theme.Muted or theme.Text
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextYAlignment = Enum.TextYAlignment.Top
+	label.TextWrapped = true
+	label.Text = tostring(text)
+	label.Parent = parent
+
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 4)
+	pad.PaddingRight = UDim.new(0, 4)
+	pad.PaddingTop = UDim.new(0, 2)
+	pad.PaddingBottom = UDim.new(0, 2)
+	pad.Parent = label
+
+	bindTheme(label, "TextColor3", muted and "Muted" or "Text")
+	register(label, text)
+
+	return function(newText)
+		label.Text = tostring(newText or "")
+	end
+end
+
+-- Novo componente: Divider horizontal sutil
+function Components.Divider(parent)
+	local line = Instance.new("Frame")
+	line.Name = "Divider"
+	line.Size = UDim2.new(1, 0, 0, 1)
+	line.BackgroundColor3 = getColor("Stroke", "Element")
+	line.BackgroundTransparency = 0.35
+	line.BorderSizePixel = 0
+	line.Parent = parent
+	bindTheme(line, "BackgroundColor3", "Stroke", "Element")
+	return line
+end
+
+return Components
+
+]=],
+    ['Notifications'] = [=[
+local TweenService = game:GetService("TweenService")
+
+local Notifications = {}
+
+local notifGui = nil
+local holder = nil
+local theme = nil
+local configRef = nil
+local enabled = true
+local maxVisible = 4
+local activeCount = 0
+local queue = {}
+local activeToasts = {}
+local initConnections = {}
+local viewportConnection = nil
+
+local TYPE_META = {
+	Info = { Key = "Info", Icon = "i" },
+	Success = { Key = "Success", Icon = "✓" },
+	Warning = { Key = "Warning", Icon = "!" },
+	Error = { Key = "Error", Icon = "×" },
+}
+
+local function getTypeColor(notifType)
+	local meta = TYPE_META[notifType] or TYPE_META.Info
+	if theme and theme[meta.Key] then
+		return theme[meta.Key], meta.Icon
+	end
+	return (theme and theme.Accent) or Color3.fromRGB(130, 95, 255), meta.Icon
+end
+
+local function shouldAnimate()
+	return not configRef or not configRef.Values or configRef.Values.AnimationsEnabled ~= false
+end
+
+local function updateHolderWidth()
+	if not holder or not notifGui then
+		return
+	end
+	local camera = workspace.CurrentCamera
+	local screenX = camera and camera.ViewportSize.X or 0
+	if screenX > 0 then
+		local width = math.clamp(screenX - 28, 220, 310)
+		holder.Size = UDim2.new(0, width, 1, -30)
+	end
+end
+
+function Notifications.Init(parent, colors, config)
+	theme = colors
+	configRef = config or configRef
+	enabled = not (configRef and configRef.Values and configRef.Values.NotificationsEnabled == false)
+
+	-- Se parent for um ScreenGui, cria um ScreenGui irmão dedicado para continuar visível com o Hub fechado
+	if parent and parent:IsA("ScreenGui") and parent.Parent then
+		local existing = parent.Parent:FindFirstChild("NovaHub_Notifications")
+		if existing then
+			existing:Destroy()
+		end
+		notifGui = Instance.new("ScreenGui")
+		notifGui.Name = "NovaHub_Notifications"
+		notifGui.ResetOnSpawn = false
+		notifGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		notifGui.DisplayOrder = 100
+		notifGui.Parent = parent.Parent
+		parent = notifGui
+	elseif parent then
+		notifGui = parent:FindFirstAncestorOfClass("ScreenGui")
+	end
+
+	holder = Instance.new("Frame")
+	holder.Name = "NotificationHolder"
+	holder.AnchorPoint = Vector2.new(1, 1)
+	holder.BackgroundTransparency = 1
+	holder.Position = UDim2.new(1, -14, 1, -14)
+	holder.Size = UDim2.new(0, 300, 1, -28)
+	holder.Parent = parent
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 8)
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+	layout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = holder
+
+	if notifGui then
+		for _, connection in ipairs(initConnections) do
+			if connection.Connected then connection:Disconnect() end
+		end
+		table.clear(initConnections)
+
+		if viewportConnection then
+			viewportConnection:Disconnect()
+			viewportConnection = nil
+		end
+		local function bindCurrentCamera()
+			if not notifGui then return end
+			if viewportConnection then
+				viewportConnection:Disconnect()
+				viewportConnection = nil
+			end
+			local camera = workspace.CurrentCamera
+			if camera then
+				viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(updateHolderWidth)
+			end
+			updateHolderWidth()
+		end
+
+		table.insert(initConnections, workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(bindCurrentCamera))
+		task.defer(bindCurrentCamera)
+	end
+end
+
+function Notifications.RefreshTheme(newTheme)
+	theme = newTheme or theme
+	for i = #activeToasts, 1, -1 do
+		local toast = activeToasts[i]
+		if not toast.Wrapper or not toast.Wrapper.Parent then
+			table.remove(activeToasts, i)
+		else
+			local color = getTypeColor(toast.Type)
+			toast.Box.BackgroundColor3 = theme.Panel
+			toast.Stroke.Color = color
+			toast.SideBar.BackgroundColor3 = color
+			toast.IconBadge.BackgroundColor3 = color
+			toast.IconBadge.TextColor3 = color
+			toast.Heading.TextColor3 = theme.Text
+			toast.Body.TextColor3 = theme.Muted
+			toast.Progress.BackgroundColor3 = color
+		end
+	end
+end
+
+function Notifications.Destroy()
+	if viewportConnection then
+		viewportConnection:Disconnect()
+		viewportConnection = nil
+	end
+	for _, connection in ipairs(initConnections) do
+		if connection.Connected then connection:Disconnect() end
+	end
+	table.clear(initConnections)
+	table.clear(queue)
+	table.clear(activeToasts)
+	activeCount = 0
+	holder = nil
+	if notifGui and notifGui.Parent then
+		notifGui:Destroy()
+	end
+	notifGui = nil
+end
+
+function Notifications.SetEnabled(value)
+	enabled = value == true
+	if not enabled then
+		table.clear(queue)
+	end
+end
+
+local displayNext
+
+local function createToast(title, message, duration, notifType)
+	activeCount += 1
+	duration = duration or 3.5
+	local accentColor, iconChar = getTypeColor(notifType or "Info")
+
+	local wrapper = Instance.new("Frame")
+	wrapper.Name = "ToastWrapper"
+	wrapper.BackgroundTransparency = 1
+	wrapper.Size = UDim2.new(1, 0, 0, 0)
+	wrapper.AutomaticSize = Enum.AutomaticSize.Y
+	wrapper.ClipsDescendants = false
+	wrapper.Parent = holder
+
+	local box = Instance.new("TextButton")
+	box.Name = "Toast"
+	box.Size = UDim2.new(1, 0, 0, 0)
+	box.Position = UDim2.fromOffset(shouldAnimate() and 40 or 0, 0)
+	box.AutomaticSize = Enum.AutomaticSize.Y
+	box.BackgroundColor3 = theme.Panel
+	box.BackgroundTransparency = shouldAnimate() and 1 or 0.04
+	box.Text = ""
+	box.AutoButtonColor = false
+	box.ClipsDescendants = true
+	box.Parent = wrapper
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = box
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = accentColor
+	stroke.Thickness = 1
+	stroke.Transparency = shouldAnimate() and 1 or 0.35
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Parent = box
+
+	local sideBar = Instance.new("Frame")
+	sideBar.Size = UDim2.new(0, 3, 1, 0)
+	sideBar.BackgroundColor3 = accentColor
+	sideBar.BackgroundTransparency = shouldAnimate() and 1 or 0
+	sideBar.BorderSizePixel = 0
+	sideBar.Parent = box
+
+	local iconBadge = Instance.new("TextLabel")
+	iconBadge.Position = UDim2.fromOffset(12, 11)
+	iconBadge.Size = UDim2.fromOffset(20, 20)
+	iconBadge.BackgroundColor3 = accentColor
+	iconBadge.BackgroundTransparency = shouldAnimate() and 1 or 0.82
+	iconBadge.Font = Enum.Font.GothamBold
+	iconBadge.TextSize = 11
+	iconBadge.TextColor3 = accentColor
+	iconBadge.TextTransparency = shouldAnimate() and 1 or 0
+	iconBadge.Text = iconChar
+	iconBadge.Parent = box
+	local iconCorner = Instance.new("UICorner")
+	iconCorner.CornerRadius = UDim.new(0, 10)
+	iconCorner.Parent = iconBadge
+
+	local textContainer = Instance.new("Frame")
+	textContainer.BackgroundTransparency = 1
+	textContainer.Position = UDim2.fromOffset(40, 0)
+	textContainer.Size = UDim2.new(1, -50, 0, 0)
+	textContainer.AutomaticSize = Enum.AutomaticSize.Y
+	textContainer.Parent = box
+
+	local textPad = Instance.new("UIPadding")
+	textPad.PaddingTop = UDim.new(0, 10)
+	textPad.PaddingBottom = UDim.new(0, 12)
+	textPad.Parent = textContainer
+
+	local textLayout = Instance.new("UIListLayout")
+	textLayout.Padding = UDim.new(0, 3)
+	textLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	textLayout.Parent = textContainer
+
+	local heading = Instance.new("TextLabel")
+	heading.LayoutOrder = 1
+	heading.BackgroundTransparency = 1
+	heading.Size = UDim2.new(1, 0, 0, 18)
+	heading.Font = Enum.Font.GothamBold
+	heading.TextSize = 12
+	heading.TextColor3 = theme.Text
+	heading.TextTransparency = shouldAnimate() and 1 or 0
+	heading.TextXAlignment = Enum.TextXAlignment.Left
+	heading.TextTruncate = Enum.TextTruncate.AtEnd
+	heading.Text = tostring(title)
+	heading.Parent = textContainer
+
+	local body = Instance.new("TextLabel")
+	body.LayoutOrder = 2
+	body.BackgroundTransparency = 1
+	body.Size = UDim2.new(1, 0, 0, 0)
+	body.AutomaticSize = Enum.AutomaticSize.Y
+	body.Font = Enum.Font.Gotham
+	body.TextSize = 11
+	body.TextColor3 = theme.Muted
+	body.TextTransparency = shouldAnimate() and 1 or 0
+	body.TextXAlignment = Enum.TextXAlignment.Left
+	body.TextYAlignment = Enum.TextYAlignment.Top
+	body.TextWrapped = true
+	body.Text = tostring(message)
+	body.Parent = textContainer
+
+	-- Barra de tempo restante na base
+	local progress = Instance.new("Frame")
+	progress.AnchorPoint = Vector2.new(0, 1)
+	progress.Position = UDim2.fromScale(0, 1)
+	progress.Size = UDim2.new(1, 0, 0, 2)
+	progress.BackgroundColor3 = accentColor
+	progress.BackgroundTransparency = 0.2
+	progress.BorderSizePixel = 0
+	progress.Parent = box
+
+	table.insert(activeToasts, {
+		Wrapper = wrapper,
+		Box = box,
+		Stroke = stroke,
+		SideBar = sideBar,
+		IconBadge = iconBadge,
+		Heading = heading,
+		Body = body,
+		Progress = progress,
+		Type = notifType or "Info",
+	})
+
+	-- Animação de entrada
+	if shouldAnimate() then
+		local enterInfo = TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+		TweenService:Create(box, enterInfo, { Position = UDim2.fromOffset(0, 0), BackgroundTransparency = 0.04 }):Play()
+		TweenService:Create(stroke, enterInfo, { Transparency = 0.35 }):Play()
+		TweenService:Create(sideBar, enterInfo, { BackgroundTransparency = 0 }):Play()
+		TweenService:Create(iconBadge, enterInfo, { BackgroundTransparency = 0.82, TextTransparency = 0 }):Play()
+		TweenService:Create(heading, enterInfo, { TextTransparency = 0 }):Play()
+		TweenService:Create(body, enterInfo, { TextTransparency = 0 }):Play()
+	end
+
+	if shouldAnimate() then
+		TweenService:Create(progress, TweenInfo.new(duration, Enum.EasingStyle.Linear), {
+			Size = UDim2.new(0, 0, 0, 2),
+		}):Play()
+	else
+		progress.Size = UDim2.new(1, 0, 0, 2)
+	end
+
+	local dismissed = false
+	local function dismiss()
+		if dismissed then
+			return
+		end
+		dismissed = true
+
+		if shouldAnimate() and wrapper.Parent then
+			local exitInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			TweenService:Create(box, exitInfo, { Position = UDim2.fromOffset(35, 0), BackgroundTransparency = 1 }):Play()
+			TweenService:Create(stroke, exitInfo, { Transparency = 1 }):Play()
+			TweenService:Create(sideBar, exitInfo, { BackgroundTransparency = 1 }):Play()
+			TweenService:Create(iconBadge, exitInfo, { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
+			TweenService:Create(heading, exitInfo, { TextTransparency = 1 }):Play()
+			TweenService:Create(body, exitInfo, { TextTransparency = 1 }):Play()
+			TweenService:Create(progress, exitInfo, { BackgroundTransparency = 1 }):Play()
+			task.wait(0.2)
+		end
+
+		if wrapper.Parent then
+			wrapper:Destroy()
+		end
+		for i = #activeToasts, 1, -1 do
+			if activeToasts[i].Wrapper == wrapper then
+				table.remove(activeToasts, i)
+				break
+			end
+		end
+		activeCount = math.max(0, activeCount - 1)
+		displayNext()
+	end
+
+	box.Activated:Connect(dismiss)
+	task.delay(duration, dismiss)
+end
+
+displayNext = function()
+	while activeCount < maxVisible and #queue > 0 do
+		local item = table.remove(queue, 1)
+		createToast(item.Title, item.Message, item.Duration, item.Type)
+	end
+end
+
+function Notifications.Show(title, message, duration, notifType)
+	if not enabled or not holder then
+		return
+	end
+	table.insert(queue, {
+		Title = title,
+		Message = message,
+		Duration = duration,
+		Type = notifType or "Info",
+	})
+	displayNext()
+end
+
+return Notifications
+
+]=],
+    ['ThemeManager'] = [=[
+local ThemeManager = {}
+
+local theme
+local presets
+local consumers = {}
+
+function ThemeManager.Init(themeTable, presetTable, targets)
+    theme = themeTable
+    presets = presetTable or {}
+    consumers = targets or {}
+end
+
+function ThemeManager.ApplyPreset(name)
+    local color = presets and presets[name]
+    if not color or not theme then
+        return false, "Preset de tema inválido: " .. tostring(name)
+    end
+
+    theme.Accent = color
+    theme.Info = color
+
+    for _, target in ipairs(consumers) do
+        if target and target.SetTheme then
+            target.SetTheme(theme)
+        elseif target and target.RefreshTheme then
+            target.RefreshTheme(theme)
+        end
+    end
+
+    return true
+end
+
+function ThemeManager.GetTheme()
+    return theme
+end
+
+function ThemeManager.Destroy()
+    table.clear(consumers)
+    theme = nil
+    presets = nil
+end
+
+return ThemeManager
+
+]=],
+    ['StateManager'] = [=[
+local StateManager = {}
+StateManager.__index = StateManager
+
+function StateManager.new(initialState)
+    local self = setmetatable({}, StateManager)
+    self._values = initialState or {}
+    self._listeners = {}
+    self._destroyed = false
+    return self
+end
+
+function StateManager:Get(key)
+    return self._values[key]
+end
+
+function StateManager:Set(key, value)
+    if self._destroyed then return false end
+    local previous = self._values[key]
+    if previous == value then return false end
+    self._values[key] = value
+
+    local listeners = self._listeners[key]
+    if listeners then
+        for _, callback in ipairs(listeners) do
+            task.spawn(callback, value, previous, key)
+        end
+    end
+    return true
+end
+
+function StateManager:Subscribe(key, callback)
+    assert(type(callback) == "function", "StateManager:Subscribe espera uma função")
+    self._listeners[key] = self._listeners[key] or {}
+    table.insert(self._listeners[key], callback)
+    local active = true
+    return function()
+        if not active then return end
+        active = false
+        local list = self._listeners[key]
+        if not list then return end
+        for index = #list, 1, -1 do
+            if list[index] == callback then
+                table.remove(list, index)
+                break
+            end
+        end
+    end
+end
+
+function StateManager:Destroy()
+    self._destroyed = true
+    table.clear(self._listeners)
+end
+
+return StateManager
+
+]=],
+    ['KeybindManager'] = [=[
+local KeybindManager = {}
+
+function KeybindManager.Bind(inputService, keyCode, callback)
+    assert(inputService, "KeybindManager precisa do UserInputService")
+    assert(typeof(keyCode) == "EnumItem" and keyCode.EnumType == Enum.KeyCode, "Keybind inválido")
+    assert(type(callback) == "function", "Callback do keybind precisa ser uma função")
+
+    local connection = inputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == keyCode then
+            callback(input)
+        end
+    end)
+
+    local disconnected = false
+    return function()
+        if disconnected then return end
+        disconnected = true
+        if connection.Connected then connection:Disconnect() end
+    end
+end
+
+return KeybindManager
+
+]=],
+    ['Settings'] = [=[
+local Settings = {}
+
+function Settings.ResetInterface(setCompact, setScale)
+    if type(setCompact) == "function" then
+        setCompact(false)
+    end
+    if type(setScale) == "function" then
+        setScale(100)
+    end
+end
+
+return Settings
+
+]=],
+}
+local moduleCache = {}
+local function loadModule(name)
+    if moduleCache[name] then return moduleCache[name] end
+    local source = moduleSources[name]
+    assert(source, "Nova Hub: modulo ausente: " .. tostring(name))
+    assert(type(loadstring) == "function", "Delta: loadstring indisponivel")
+    local chunk, compileError = loadstring(source, "NovaHub/" .. name)
+    assert(chunk, compileError)
+    local result = chunk()
+    moduleCache[name] = result
+    return result
+end
+local Config = loadModule("Config")
+local UI = loadModule("UI")
+local Components = loadModule("Components")
+local Notifications = loadModule("Notifications")
+local ThemeManager = loadModule("ThemeManager")
+local StateManager = loadModule("StateManager")
+local KeybindManager = loadModule("KeybindManager")
+local Settings = loadModule("Settings")
+
+local state = StateManager.new(Config.Values)
+local ui = UI.Create(getInterfaceParent(), Config.Theme, Config)
+
+-- Permite encerrar a interface antes de executar novamente.
+local env = (type(getgenv) == "function" and getgenv()) or _G
+if env.NovaHubUnload then pcall(env.NovaHubUnload) end
+env.NovaHubUnload = function()
+    if ui and ui.Screen and ui.Screen.Parent then ui.Screen:Destroy() end
+end
+Components.Init(Config.Theme, Config)
+Notifications.Init(ui.Screen, Config.Theme, Config)
+
+ThemeManager.Init(Config.Theme, Config.Presets, {
+    ui,
+    Components,
+    Notifications,
+})
+
+local pages = {}
+ui._Pages = pages
+
+local function addPage(name, icon)
+    local page, tab = UI.CreatePage(ui, Config.Theme, name, icon)
+    pages[name] = { Page = page, Tab = tab }
+    tab.Activated:Connect(function()
+        ui._ActivePage = name
+        UI.SwitchPage(pages, name, Config.Theme, Config)
+        ui.Search.Text = ""
+        Components.Filter("")
+    end)
+    return page
+end
+
+local Home = addPage("Home", "⌂")
+local Visual = addPage("Interface", "◈")
+local SettingsPage = addPage("Settings", "⚙")
+
+ui._ActivePage = "Home"
+UI.SwitchPage(pages, "Home", Config.Theme, Config)
+
+-- Home
+local homeSection = Components.Section(Home, "Welcome")
+Components.Label(homeSection, "Nova Hub v1.2 — Delta Executor build (single-file).", true)
+Components.Divider(homeSection)
+
+Components.Button(homeSection, "Test notification (Success)", function()
+    Notifications.Show("Nova Hub", "Sistema de notificações com fila e barra de progresso ativo.", 3.5, "Success")
+end)
+Components.Button(homeSection, "Show warning", function()
+    Notifications.Show("Aviso", "Exemplo de notificação de alerta com quebra automática de linha.", 4, "Warning")
+end)
+Components.Dropdown(homeSection, "Demo dropdown", { "Option A", "Option B", "Option C" }, "Option A", function(choice)
+    Notifications.Show("Dropdown", "Selecionado: " .. choice, 2.5, "Info")
+end)
+Components.TextBox(homeSection, "Profile name", "Digite um nome...", "", function(text, enterPressed)
+    if text ~= "" then
+        Notifications.Show("Perfil", "Valor salvo: " .. text .. (enterPressed and " (Enter)" or ""), 3, "Success")
+    end
+end)
+Components.Keybind(homeSection, "Demo keybind", Enum.KeyCode.G, function(key)
+    Notifications.Show("Keybind", key.Name .. " pressionada.", 2.5, "Info")
+end)
+Components.Toggle(homeSection, "Notifications", state:Get("NotificationsEnabled"), function(value)
+    state:Set("NotificationsEnabled", value)
+    Notifications.SetEnabled(value)
+end)
+
+-- Interface
+local visualSection = Components.Section(Visual, "Interface options")
+Components.Toggle(visualSection, "Animations", state:Get("AnimationsEnabled"), function(value)
+    state:Set("AnimationsEnabled", value)
+end)
+local setScaleSlider = Components.Slider(visualSection, "UI scale preview", 70, 115, math.floor((state:Get("UserScale") or 1) * 100), function(value)
+    ui.SetUserScale(value / 100)
+    state:Set("UserScale", value / 100)
+end, 1)
+
+-- Settings
+local settingsSection = Components.Section(SettingsPage, "Preferences")
+local setCompactToggle = Components.Toggle(settingsSection, "Compact window", state:Get("Compact"), function(value)
+    ui.SetCompact(value)
+    state:Set("Compact", value)
+end)
+
+Components.Button(settingsSection, "Reset interface size", function()
+    Settings.ResetInterface(setCompactToggle, setScaleSlider)
+    Notifications.Show("Settings", "Tamanho e escala restaurados.", 3, "Success")
+end)
+
+Components.Button(settingsSection, "About Nova Hub", function()
+    Notifications.Show("Nova Hub", "Framework modular de UI, versão 1.2.", 3, "Info")
+end)
+
+Components.Dropdown(settingsSection, "Accent preset", { "Violet", "Blue", "Green", "Rose", "Amber" }, "Violet", function(preset)
+    local success = ThemeManager.ApplyPreset(preset)
+    if success then
+        Notifications.Show("Tema atualizado", "Preset " .. preset .. " aplicado em tempo real.", 3, "Info")
+    end
+end)
+
+local searchConnection = ui.Search:GetPropertyChangedSignal("Text"):Connect(function()
+    Components.Filter(ui.Search.Text)
+end)
+
+local unbindToggle = KeybindManager.Bind(UserInputService, Config.Keybind, function()
+    ui.Toggle()
+end)
+
+ui.Screen.Destroying:Connect(function()
+    if searchConnection.Connected then searchConnection:Disconnect() end
+    unbindToggle()
+    Notifications.Destroy()
+    Components.Destroy()
+    ThemeManager.Destroy()
+    state:Destroy()
+end)
+
+Notifications.Show("Nova Hub", "Interface carregada com sucesso.", 3.5, "Success")
